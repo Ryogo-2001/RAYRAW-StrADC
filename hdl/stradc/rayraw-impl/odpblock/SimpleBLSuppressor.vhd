@@ -28,7 +28,7 @@ entity SimpleBLSuppressor is
     dIn               : in  std_logic_vector(kNumSample*kWidthAdcData -1 downto 0);
 
     -- Data Out --
-    vaildOut          : out std_logic;
+    validOut          : out std_logic;
     dOut              : out std_logic_vector(kNumSample*kWidthAdcData -1 downto 0);
     typeOut           : out std_logic_vector(kWidthAdcSFType-1 downto 0)
   );
@@ -68,7 +68,7 @@ architecture RTL of SimpleBLSuppressor is
 begin
   -- =========================== body ===============================
 
-  vaildOut  <= reg_valid_out;
+  validOut  <= reg_valid_out;
   dOut      <= dmux_out;
   typeOut   <= dmux_type_out;
 
