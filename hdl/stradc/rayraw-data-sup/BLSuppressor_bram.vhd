@@ -27,6 +27,9 @@ entity BLSuppressor_bram is
     polarityIn        : in  std_logic;
     thresholdIn       : in  std_logic_vector(kWidthAdcData-1 downto 0);
 
+    -- hbcount
+    hbCount           : in std_logic_vector(15 downto 0);
+
     -- Data In  --
     validIn           : in  std_logic;
     dIn               : in  std_logic_vector(kNumSample*kWidthAdcData-1 downto 0);
@@ -59,6 +62,13 @@ architecture BRAM_Based of BLSuppressor_bram is
 
   signal judge_flag   : std_logic_vector(kNumSample-1 downto 0);
   signal pulse_detect : std_logic;
+
+  -- hbCount header
+  type t_hb_delay is array (0 to 15) of std_logic_vector(15 downto 0);
+  signal hb_delay_line : t_hb_delay := (others =>(others=> '0'));
+
+  -- hbCount trailer
+  signal prev_hbCount  : std_logic_vector(15 downto 0) := (others => '0');
 
   -- Logic Control Flags & Counters
   signal is_active    : std_logic := '0';
@@ -112,6 +122,12 @@ begin
       -- Write
       if enUnit = '1' and validIn = '1' then
         ram_bank(addr_w) <= dIn;
+
+        -- hbCount Shift register
+        hb_delay_line(0) <= hbCount;
+        for i in 0 to 14 loop
+          hb_delay_line(i+1) <= hb_delay_line(i);
+        end loop;
       end if;
       
       -- Read 
@@ -124,6 +140,13 @@ begin
   u_main : process(clk)
   begin
     if rising_edge(clk) then
+      -- hbcount trail (trail time)
+      -- prev_hbCount <= hbCount;
+      -- hbcount trail (get last data time)
+      if validIn = '1' then
+        prev_hbCount <= hbCount;
+      end if;
+
       if srst = '1' then
         is_active    <= '0';
         addr_w       <= 0;
@@ -155,7 +178,11 @@ begin
                 is_active    <= '1';
                 ctrl_valid   <= '1';
                 ctrl_type    <= kCTypeSfHead;
-                ctrl_dout    <= (others => '1'); 
+
+                -- not use
+                --ctrl_dout    <= (others => '1'); 
+                -- hdcount main Header
+                ctrl_dout    <= x"000000" & hb_delay_line(kPreSamples - 1);
                 
                 post_counter <= kPreSamples + kPostSamples + 1; 
                 size_count   <= (others => '0');
@@ -193,7 +220,17 @@ begin
                 -- TRAILER
                 ctrl_valid <= '1';
                 ctrl_type  <= kCTypeSfTrail;
-                ctrl_dout  <= std_logic_vector(resize(size_count, ctrl_dout'length));
+
+                -- not use data size
+                --ctrl_dout  <= std_logic_vector(resize(size_count, ctrl_dout'length));
+                 -- hbCount main trailer
+                 -- not use trail time
+                 --ctrl_dout  <= x"000000" & hbCount;
+
+                 -- hbCount last data time
+                 ctrl_dout  <= x"000000" & prev_hbCount;
+
+
                 is_active  <= '0'; 
               end if;
             end if; 

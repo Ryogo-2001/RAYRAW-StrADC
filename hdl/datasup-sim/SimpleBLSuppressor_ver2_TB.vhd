@@ -6,9 +6,11 @@ use std.textio.all;
 library mylib;
 use mylib.defYaenamiAdc.all;
 use mylib.defADC.all;
-
-use work.VhdlSimSet.all;
-use work.SimpleBLSuppressor_SimSet.all;
+use mylib.simpleblsuppressor_simset.all;
+use mylib.VhdlSimSet.all;
+-- not use
+--use work.VhdlSimSet.all;
+ --use work.SimpleBLSuppressor_SimSet.all;
 
 entity SimpleBLSuppressor_ver2_TB is
 end SimpleBLSuppressor_ver2_TB;
@@ -25,6 +27,11 @@ architecture Behavioral of SimpleBLSuppressor_ver2_TB is
   -- signal in
   signal validIn      : std_logic;
   signal dIn          : std_logic_vector(kNumSample*kWidthData-1 downto 0);
+
+  -- hbCount
+  signal hbCount       : std_logic_vector(15 downto 0) := (others => '0');
+  signal tb_hb_counter : unsigned(15 downto 0) := (others => '0');
+  
 
   -- BLSupressor
   signal supp_validOut : std_logic;
@@ -59,6 +66,20 @@ architecture Behavioral of SimpleBLSuppressor_ver2_TB is
 
 begin
 
+  --hbCount 
+  p_hb_counter : process(clk)
+  begin
+    --if rising_edge(clk) then
+    if falling_edge(clk) then
+      if srst = '1' then
+        tb_hb_counter <= (others => '0');
+      else
+        tb_hb_counter <= tb_hb_counter + 1;
+      end if;
+    end if;
+  end process;
+  
+  hbCount <= std_logic_vector(tb_hb_counter);
   -- clock read testpattern file 
   main : process
   begin
@@ -67,7 +88,7 @@ begin
     srst <= '0';
     for i in 1 to 2 loop clock(clk); end loop;
 
-    file_open(in_file, "C:/Vivado_Projects/test_pulse/saturation/event_0003.txt", READ_MODE);
+    file_open(in_file, "C:/RAYRAW-StrADC/test_pulse/normal/event_0002.txt", READ_MODE);
     set_txt(in_file, clk, dIn, validIn);
     file_close(in_file);
 
@@ -93,7 +114,11 @@ begin
       enUnit      => '1', --1:BL suppress   0:Streaming Mode
       polarityIn  => '1',
       thresholdIn => std_logic_vector(to_unsigned(530, kWidthData)),
-      
+ 
+      --hbCcount
+      hbCount     => hbCount,
+
+      -- in
       validIn     => validIn,
       dIn         => dIn,
       
