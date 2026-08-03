@@ -88,7 +88,8 @@ begin
     srst <= '0';
     for i in 1 to 2 loop clock(clk); end loop;
 
-    file_open(in_file, "C:/RAYRAW-StrADC/test_pulse/normal/event_0002.txt", READ_MODE);
+    --file_open(in_file, "C:/RAYRAW-StrADC/test_pulse/normal/event_0002.txt", READ_MODE);
+    file_open(in_file, "C:/Users/ryogo/Vivado_project/RAYRAW-StrADC/test_pulse/normal/event_0002.txt", READ_MODE);
     set_txt(in_file, clk, dIn, validIn);
     file_close(in_file);
 
