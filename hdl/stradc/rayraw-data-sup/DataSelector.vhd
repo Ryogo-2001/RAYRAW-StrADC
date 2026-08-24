@@ -6,6 +6,7 @@ use IEEE.NUMERIC_STD.ALL;
 library mylib;
 use mylib.defDataBusAbst.all;
 use mylib.defADC.all;
+use mylib.defDelimiter.all;
 
 entity DataSelector is
   generic (
@@ -18,12 +19,12 @@ entity DataSelector is
     clk            : in  std_logic;
     srst           : in  std_logic;
 
-    -- data in
+    -- data in (ADC)
     raw_validIn    : in  std_logic;
     raw_dIn        : in  std_logic_vector(kNumSample*kWidthAdcData-1 downto 0);
     raw_typeIn     : in  std_logic_vector(kWidthAdcSFType-1 downto 0);
 
-    -- data in (each module)
+    -- data in 
     intg_val       : in  std_logic_vector(kWidthIntegral-1 downto 0);
     peak_val       : in  std_logic_vector(kWidthAdcData-1 downto 0);
     tot_val        : in  std_logic_vector(kWidthIntegral-1 downto 0);
@@ -31,10 +32,13 @@ entity DataSelector is
     isPileup       : in  std_logic;
     pileup_valid   : in  std_logic;
 
-    -- data out
+    -- HBD in (64bit)
+    validDelimiter : in  std_logic;
+    dInDelimiter   : in  std_logic_vector(63 downto 0);
+
+    -- Data out
     validOut       : out std_logic;
-    dOut           : out std_logic_vector(kNumSample*kWidthAdcData-1 downto 0);
-    typeOut        : out std_logic_vector(kWidthAdcSFType-1 downto 0)
+    dOut           : out std_logic_vector(63 downto 0)
   );
 end DataSelector;
 
@@ -52,30 +56,63 @@ architecture Behavioral of DataSelector is
   signal wr_ptr : integer range 0 to kMaxBufWords-1 := 0;
   signal rd_ptr : integer range 0 to kMaxBufWords-1 := 0;
 
-  -- flag
-  signal flag_send_raw  : std_logic := '0';
-  signal flag_send_sum1 : std_logic := '0';
-  signal flag_send_sum2 : std_logic := '0';
+  signal busy_event : std_logic := '0'; -- add flag (HBD)
+  signal busy_raw   : std_logic := '0';
+  signal req_raw    : std_logic := '0';
+  signal req_sum    : std_logic := '0';
+  signal req_hbd    : std_logic := '0';
+  
+  signal sum_step   : std_logic := '0';
+  signal hbd_step   : std_logic := '0';
 
-  -- latch
-  signal reg_intg : std_logic_vector(kWidthIntegral-1 downto 0);
-  signal reg_peak : std_logic_vector(kWidthAdcData-1 downto 0);
-  signal reg_tot  : std_logic_vector(kWidthIntegral-1 downto 0);
+  -- regester
+  signal reg_intg     : std_logic_vector(kWidthIntegral-1 downto 0);
+  signal reg_peak     : std_logic_vector(kWidthAdcData-1 downto 0);
+  signal reg_tot      : std_logic_vector(kWidthIntegral-1 downto 0);
+  signal reg_hbd_data : std_logic_vector(63 downto 0);
+  
+  -- event counter
+  signal num_word     : unsigned(15 downto 0) := (others => '0');
+
+  -- HBD delay 
+  -- kPreSamples + BRAM_delay(1)
+  constant kHbdDelay : integer := 11; 
+  signal valid_shift : std_logic_vector(kHbdDelay-1 downto 0) := (others => '0');
+  type t_data_shift is array (0 to kHbdDelay-1) of std_logic_vector(63 downto 0);
+  signal data_shift  : t_data_shift := (others => (others => '0'));
 
 begin
 
-  --buffer
+  -- HBD delay process
+  u_hbd_delay : process(clk)
+  begin
+    if rising_edge(clk) then
+      if srst = '1' then
+        valid_shift <= (others => '0');
+        data_shift  <= (others => (others => '0'));
+      else
+        valid_shift(0) <= validDelimiter;
+        data_shift(0)  <= dInDelimiter;
+        -- shift process
+        for i in 1 to kHbdDelay-1 loop
+          valid_shift(i) <= valid_shift(i-1);
+          data_shift(i)  <= data_shift(i-1);
+        end loop;
+      end if;
+    end if;
+  end process;
+
+
+  -- Buffer
   u_write : process(clk)
   begin
     if rising_edge(clk) then
       if raw_validIn = '1' then
         if raw_typeIn = kCTypeSfHead then
-          -- When the header arrives, reset the pointer and write.
           buf_d(0) <= raw_dIn;
           buf_t(0) <= raw_typeIn;
           wr_ptr   <= 1;
         else
-          -- write
           buf_d(wr_ptr) <= raw_dIn;
           buf_t(wr_ptr) <= raw_typeIn;
           wr_ptr <= wr_ptr + 1;
@@ -84,62 +121,106 @@ begin
     end if;
   end process;
 
-  --flag
   u_read : process(clk)
   begin
     if rising_edge(clk) then
       if srst = '1' then
-        flag_send_raw  <= '0';
-        flag_send_sum1 <= '0';
-        flag_send_sum2 <= '0';
-        validOut       <= '0';
+        busy_event   <= '0';
+        busy_raw     <= '0';
+        req_raw      <= '0';
+        req_sum      <= '0';
+        req_hbd      <= '0';
+        sum_step     <= '0';
+        hbd_step     <= '0';
+        validOut     <= '0';
+        rd_ptr       <= 0;
+        num_word     <= (others => '0');
       else
-        validOut <= '0'; 
-
-        -- Judgment part
-        if pileup_valid = '1' then
-          if (isSat = '1') or (isPileup = '1') then
-            -- saturate or pileup flag->1
-            flag_send_raw <= '1';
-            rd_ptr        <= 0;
-          else
-            flag_send_sum1 <= '1';
-            reg_intg       <= intg_val;
-            reg_peak       <= peak_val;
-            reg_tot        <= tot_val;
-          end if;
+        
+        if raw_validIn = '1' and raw_typeIn = kCTypeSfHead then
+          busy_event <= '1';
         end if;
 
-        --Out
         
-        -- send integral
-        if flag_send_sum1 = '1' then
-          flag_send_sum1 <= '0'; 
-          flag_send_sum2 <= '1'; 
-          
-          validOut <= '1';
-          typeOut  <= kCTypeSfPayload;
-          dOut     <= reg_intg & x"00"; -- 32bit + 8bit = 40bit
-        
-        -- send tot
-        elsif flag_send_sum2 = '1' then
-          flag_send_sum2 <= '0'; 
-          
-          validOut <= '1';
-          typeOut  <= kCTypeSfTrail;
-          dOut     <= reg_tot(29 downto 0) & reg_peak; -- 30bit + 10bit = 40bit
+        if pileup_valid = '1' then
+          if (isSat = '1') or (isPileup = '1') then
+            req_raw <= '1';
+          else
+            req_sum <= '1';
+          end if;
+          reg_intg <= intg_val;
+          reg_peak <= peak_val;
+          reg_tot  <= tot_val;
+        end if;
 
-        -- send RAW data
-        elsif flag_send_raw = '1' then
+        -- ref kHbdDelay-1
+        if valid_shift(kHbdDelay-1) = '1' then
+          if req_hbd = '0' then
+            reg_hbd_data <= data_shift(kHbdDelay-1); 
+          end if;
+          req_hbd <= '1';
+        end if;
+
+
+        validOut <= '0'; 
+
+        -- RAW
+        if busy_raw = '1' or req_raw = '1' then
+          
+          if req_raw = '1' then
+            req_raw  <= '0';
+            busy_raw <= '1';
+            num_word <= num_word + 1;
+          end if;
+          
           validOut <= '1';
-          typeOut  <= buf_t(rd_ptr);
-          dOut     <= buf_d(rd_ptr);
+          dOut(63 downto 60) <= "00" & buf_t(rd_ptr); 
+          dOut(59 downto 40) <= (others => '0');
+          dOut(39 downto 0)  <= buf_d(rd_ptr);
           
           if buf_t(rd_ptr) = kCTypeSfTrail then
-            flag_send_raw <= '0'; -- T end rail
+            busy_raw   <= '0';
+            busy_event <= '0';
+            rd_ptr     <= 0; 
           else
-            rd_ptr <= rd_ptr + 1;
+            rd_ptr   <= rd_ptr + 1;
           end if;
+
+        
+        elsif req_sum = '1' then
+          validOut <= '1';
+          
+          if sum_step = '0' then
+            dOut(63 downto 60) <= "00" & kCTypeSfPayload;
+            dOut(59 downto 40) <= (others => '0');
+            dOut(39 downto 0)  <= reg_intg & x"00";
+            sum_step <= '1';
+            num_word <= num_word + 1;
+          else
+            dOut(63 downto 60) <= "00" & kCTypeSfTrail;
+            dOut(59 downto 40) <= (others => '0');
+            dOut(39 downto 0)  <= reg_tot(29 downto 0) & reg_peak;
+            sum_step   <= '0';
+            req_sum    <= '0';
+            busy_event <= '0'; 
+          end if;
+
+        -- HBD 
+        elsif req_hbd = '1' and busy_event = '0' then
+          validOut <= '1';
+          
+          if hbd_step = '0' then
+            dOut     <= reg_hbd_data;
+            hbd_step <= '1';
+          else
+            dOut(63 downto 60) <= kDatatypeHeartbeatT2; 
+            dOut(59 downto 16) <= (others => '0');
+            dOut(15 downto 0)  <= std_logic_vector(num_word);
+            hbd_step <= '0';
+            req_hbd  <= '0';
+            num_word <= (others => '0');
+          end if;
+
         end if;
 
       end if;
