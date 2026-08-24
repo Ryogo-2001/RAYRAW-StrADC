@@ -18,7 +18,7 @@ end SimpleBLSuppressor_ver2_TB;
 architecture Behavioral of SimpleBLSuppressor_ver2_TB is
 
   constant kNumSample     : integer := 4;
-  constant kMyAdcWidth    : integer := 10; 
+  constant kAdcWidthData     : integer := 10;
   constant kWidthIntegral : integer := 32; 
 
   signal clk          : std_logic;
@@ -26,7 +26,7 @@ architecture Behavioral of SimpleBLSuppressor_ver2_TB is
   
   -- signal in
   signal validIn      : std_logic;
-  signal dIn          : std_logic_vector(kNumSample*kMyAdcWidth-1 downto 0);
+  signal dIn          : std_logic_vector(kNumSample*kAdcWidthData-1 downto 0);
 
   -- hbCount
   signal hbCount       : std_logic_vector(15 downto 0) := (others => '0');
@@ -34,7 +34,7 @@ architecture Behavioral of SimpleBLSuppressor_ver2_TB is
   
   -- BLSupressor
   signal supp_validOut : std_logic;
-  signal supp_dOut     : std_logic_vector(kNumSample*kMyAdcWidth-1 downto 0);
+  signal supp_dOut     : std_logic_vector(kNumSample*kAdcWidthData-1 downto 0);
   signal supp_typeOut  : std_logic_vector(kWidthAdcSFType-1 downto 0);
 
   -- integral signal
@@ -47,7 +47,7 @@ architecture Behavioral of SimpleBLSuppressor_ver2_TB is
 
   -- pulse height signal
   signal peak_validOut : std_logic;
-  signal peak_dOut     : std_logic_vector(kMyAdcWidth-1 downto 0);
+  signal peak_dOut     : std_logic_vector(kAdcWidthData-1 downto 0);
   
   -- tot logic
   signal tot_validOut : std_logic;
@@ -133,7 +133,7 @@ begin
   u_dut : entity mylib.BLSuppressor_bram
     generic map(
       kNumSample      => kNumSample,
-      kWidthAdcData   => kMyAdcWidth,
+      kWidthAdcData   => kAdcWidthData,
       kNumFsModeWords => 256,
       kPreSamples     => 2,
       kPostSamples    => 4,
@@ -144,7 +144,7 @@ begin
       clk         => clk,
       enUnit      => '1', 
       polarityIn  => '1',
-      thresholdIn => std_logic_vector(to_unsigned(530, kMyAdcWidth)),
+      thresholdIn => std_logic_vector(to_unsigned(530, kAdcWidthData)),
       hbCount     => hbCount,
       validIn     => validIn,
       dIn         => dIn,
@@ -157,13 +157,13 @@ begin
   u_intg : entity mylib.WaveformIntegrator
     generic map(
       kNumSample     => kNumSample,
-      kWidthAdcData  => kMyAdcWidth,
+      kWidthAdcData  => kAdcWidthData,
       kWidthIntegral => kWidthIntegral
     )
     port map(
       clk          => clk,
       srst         => srst,
-      baselineIn   => std_logic_vector(to_unsigned(500, kMyAdcWidth)),
+      baselineIn   => std_logic_vector(to_unsigned(500, kAdcWidthData)),
       validIn      => supp_validOut,
       dIn          => supp_dOut,
       typeIn       => supp_typeOut,
@@ -174,7 +174,7 @@ begin
   u_sat : entity mylib.SaturationDetector
     generic map(
       kNumSample    => kNumSample,
-      kWidthAdcData => kMyAdcWidth,
+      kWidthAdcData => kAdcWidthData,
       kSatValue     => 910
     )
     port map(
@@ -190,7 +190,7 @@ begin
   u_peak : entity mylib.PulseHeightSearch
     generic map(
       kNumSample    => kNumSample,
-      kWidthAdcData => kMyAdcWidth
+      kWidthAdcData => kAdcWidthData
     )
     port map(
       clk          => clk,
@@ -205,13 +205,13 @@ begin
   u_tot : entity mylib.waveform_tot
     generic map(
       kNumSample    => kNumSample,
-      kWidthAdcData => kMyAdcWidth,
+      kWidthAdcData => kAdcWidthData,
       kWidthToT     => kWidthIntegral 
     )
     port map(
       clk          => clk,
       srst         => srst,
-      thresholdIn  => std_logic_vector(to_unsigned(530, kMyAdcWidth)),
+      thresholdIn  => std_logic_vector(to_unsigned(530, kAdcWidthData)),
       validIn      => supp_validOut,
       dIn          => supp_dOut,
       typeIn       => supp_typeOut,
@@ -221,7 +221,7 @@ begin
 
   u_pileup : entity mylib.pileupDetector
     generic map(
-      kWidthAdcData => kMyAdcWidth,
+      kWidthAdcData => kAdcWidthData,
       kWidthToT     => kWidthIntegral,
       kLutDepth     => 64
     )
@@ -240,7 +240,7 @@ begin
   u_selector : entity mylib.DataSelector
     generic map(
       kNumSample     => kNumSample,
-      kWidthAdcData  => kMyAdcWidth,
+      kWidthAdcData  => kAdcWidthData,
       kWidthIntegral => kWidthIntegral,
       kMaxBufWords   => 256
     )
