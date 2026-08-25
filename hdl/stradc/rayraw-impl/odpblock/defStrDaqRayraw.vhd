@@ -16,6 +16,7 @@ package defStrDaqRayraw is
   constant kIndexBlsPol           : integer:= 1;
 
   constant kThBls                 : LocalAddressType := x"030"; -- W/R, [9:0], Threshold setting for BLS
+  constant kBaselineBls           : LocalAddressType := x"0E0"; -- W/R, [9:0], Baseline setting for BLS
 
   constant kEnBypass              : LocalAddressType := x"040"; -- W/R, [1:0], Enable bypass route in ODPBlock
   constant kWidthBypass           : integer:= 8;
