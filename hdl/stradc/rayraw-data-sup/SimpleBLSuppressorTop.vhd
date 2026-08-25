@@ -33,15 +33,16 @@ entity SimpleBLSuppressorTop is
     thresholdIn       : in  std_logic_vector(kWidthAdcData-1 downto 0);
     baselineIn        : in  std_logic_vector(kWidthAdcData-1 downto 0);
 
-    -- LACCP / Delimiter --
+    -- time stamp--
     hbCount           : in  std_logic_vector(kWidthStrHbc-1 downto 0);
-    hbfNumber         : in  std_logic_vector(kWidthStrHbf-1 downto 0);
-    signBit           : in  std_logic;
-    flagsIn           : in  std_logic_vector(kWidthDelimiterFlag-1 downto 0);
 
     -- Data In --
     validIn           : in  std_logic;
     dIn               : in  std_logic_vector(kNumSample*kWidthAdcData-1 downto 0);
+
+    -- HBD in --
+    validDelimiter    : in  std_logic;
+    dInDelimiter      : in  std_logic_vector(63 downto 0);
 
     -- Data Out (64bit, HBD-framed) --
     validOut          : out std_logic;
@@ -50,10 +51,6 @@ entity SimpleBLSuppressorTop is
 end SimpleBLSuppressorTop;
 
 architecture Behavioral of SimpleBLSuppressorTop is
-
-  -- HBD --
-  signal hbd_valid       : std_logic;
-  signal hbd_data        : std_logic_vector(63 downto 0);
 
   -- BLSuppressor --
   signal supp_validOut   : std_logic;
@@ -81,22 +78,6 @@ architecture Behavioral of SimpleBLSuppressorTop is
   signal pileup_dOut     : std_logic;
 
 begin
-
-  -- HBD Generator
-  u_delimiter_gen : entity mylib.DelimiterGenerator
-    generic map (
-      enDEBUG => enDEBUG
-    )
-    port map (
-      syncReset      => srst,
-      clk            => clk,
-      flagsIn        => flagsIn,
-      hbCount        => hbCount,
-      hbfNumber      => hbfNumber,
-      signBit        => signBit,
-      validDelimiter => hbd_valid,
-      dOutDelimiter  => hbd_data
-    );
 
   -- BLSuppressor
   u_suppressor : entity mylib.BLSuppressor_bram
@@ -232,8 +213,8 @@ begin
       pileup_valid   => pileup_validOut,
 
       -- HBD in
-      validDelimiter => hbd_valid,
-      dInDelimiter   => hbd_data,
+      validDelimiter => validDelimiter,
+      dInDelimiter   => dInDelimiter,
 
       -- dOut (64bit)
       validOut       => validOut,
