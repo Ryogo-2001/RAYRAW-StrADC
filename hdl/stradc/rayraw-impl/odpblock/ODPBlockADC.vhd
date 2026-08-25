@@ -37,6 +37,7 @@ entity ODPBlockADC is
     enBLSuppressor  : in  std_logic;
     polBLSuppressor : in  std_logic;
     thBLSuppressor  : in  std_logic_vector(kNumAdcBit-1 downto 0);
+    baselineBLSuppressor : in  std_logic_vector(kNumAdcBit-1 downto 0);
 
     -- Data flow control --
     daqOn           : in  std_logic;
@@ -98,21 +99,8 @@ architecture RTL of ODPBlockADC is
   signal valid_data_delay    : std_logic_vector(kNumInput -1 downto 0);
   signal adc_data_delay      : AdcArrayType(kNumInput-1 downto 0)(kWidthPackedAdc-1 downto 0);
 
-  -- BL suppressor --
-  signal valid_data_bls       : std_logic_vector(kNumInput -1 downto 0);
-  signal adc_data_bls         : AdcArrayType(kNumInput-1 downto 0)(kWidthPackedAdc-1 downto 0);
-  type SfCType is array (integer range 0 to kNumInput-1) of std_logic_vector(kWidthAdcSFType-1 downto 0);
-  signal sf_type_out          : SfCType;
-
-  -- Data formatter --
-  signal dout_formatter       : DataArrayType(kNumInput-1 downto 0);
-  signal valid_data_formatter : std_logic_vector(kNumInput -1 downto 0);
-  signal sf_timestamp         : signed(kPosSfhTime'length -1 downto 0);
-  signal long_hbcount         : signed(kPosSfhTime'length -1 downto 0);
-  signal extended_ofs         : signed(kPosSfhTime'length -1 downto 0);
-
-  -- Trigger emulation --
-  signal valid_data_trigger     : std_logic_vector(kNumInput -1 downto 0);
+  -- SimpleBLSuppressorTop (BL suppression + pileup detection + data selection) --
+  signal supptop_validOut     : std_logic_vector(kNumInput -1 downto 0);
 
   -- Delimiter inserter --
   signal valid_inserter         : std_logic_vector(kNumInput -1 downto 0);
@@ -201,100 +189,42 @@ begin
       dOut            => adc_data_delay
       );
 
-  long_hbcount(sf_timestamp'high downto sf_timestamp'high - hbCount'length +1)  <= signed(hbCount);
-  long_hbcount(sf_timestamp'high - hbCount'length downto 0)                     <= (others => '0');
-  extended_ofs(LaccpFineOffset'high downto 0)                     <= LaccpFineOffset;
-  extended_ofs(extended_ofs'high downto LaccpFineOffset'high+1)   <= (others => LaccpFineOffset(LaccpFineOffset'high));
-  sf_timestamp  <= long_hbcount + extended_ofs;
-
-  --sf_timestamp(sf_timestamp'high downto sf_timestamp'high - hbCount'length +1) <= hbCount;
-  --sf_timestamp(sf_timestamp'high - hbCount'length downto 0) <= (others => '0');
-
   -- Heartbeat frame definition ------------------------------------------------
   gen_adcdata : for i in 0 to kNumInput-1 generate
   begin
-    -- BL suppression ----------------------------------------------------------
-    u_SBLS : entity mylib.SimpleBLSuppressor
-    generic map(
-      kNumSample        => 4,
-      kWidthAdcData     => kNumAdcBit,
-      kNumFsModeWords   => 256,
-      --enDEBUG           => GetDebugFlag(i)
-      enDEBUG           => false
-    )
-    port map(
-      -- system --
-      srst              => sync_reset,
-      clk               => sysClk,
-      enUnit            => enBLSuppressor,
-      polarityIn        => polBLSuppressor,
-      thresholdIn       => thBLSuppressor,
-
-      -- Data In --
-      validIn           => valid_data_delay(i),
-      dIn               => adc_data_delay(i),
-
-      -- Data Out --
-      vaildOut          => valid_data_bls(i),
-      dOut              => adc_data_bls(i),
-      typeOut           => sf_type_out(i)
-    );
-
-    -- SubFrameFormatter --
-    u_formatter : entity mylib.SubFrameFormatter
+    -- BL suppression + pileup detection + data selection -----------------------
+    u_SimpleBLSuppressorTop : entity mylib.SimpleBLSuppressorTop
       generic map(
-        kNumSample        => 4,
-        kValidNumSample   => 3,
-        kWidthAdcData     => kNumAdcBit,
-        kChannel          => i,
-        kNumFsModeWords   => 256
+        kNumSample      => 4,
+        kWidthAdcData   => kNumAdcBit,
+        kNumFsModeWords => 256,
+        enDEBUG         => false
       )
       port map(
         -- system --
-        suppMode          => enBLSuppressor,
-        timeStamp         => std_logic_vector(sf_timestamp),
+        srst        => sync_reset,
+        clk         => sysClk,
+        enUnit      => enBLSuppressor,
+        polarityIn  => polBLSuppressor,
+        thresholdIn => thBLSuppressor,
+        baselineIn  => baselineBLSuppressor,
+        hbCount     => hbCount,
 
         -- Data In --
-        validIn           => valid_data_bls(i),
-        typeIn            => sf_type_out(i),
-        dIn               => adc_data_bls(i),
+        validIn     => valid_data_delay(i),
+        dIn         => adc_data_delay(i),
+
+        -- HBD in --
+        validDelimiter => validDelimiter,
+        dInDelimiter   => dInDelimiter,
 
         -- Data Out --
-        vaildOut          => valid_data_formatter(i),
-        dOut              => dout_formatter(i)
+        validOut    => supptop_validOut(i),
+        dOut        => dout_inserter(i)
       );
 
-    -- Delimiter inserter --
-    valid_data_trigger(i)   <= triggerGate and valid_data_formatter(i);
-
-    u_dlmist : entity mylib.DelimiterInserterAdc
-      generic map
-        (
-          --enDEBUG      => GetDebugFlag(i)
-          enDEBUG      => false
-        )
-        port map
-        (
-          -- system --
-          clk             => sysClk,
-          syncReset       => sync_reset,
-          --userRegIn       => userReg,
-          signBit         => LaccpFineOffset(LaccpFineOffset'high),
-
-          -- TDC in --
-          validIn         => valid_data_trigger(i),
-          dataIn          => dout_formatter(i),
-
-          -- Delimiter word input --
-          validDelimiter  => validDelimiter,
-          dInDelimiter    => dInDelimiter,
-          daqOn           => daqOn,
-          hbfThrottlingOn => hbfThrottlingOn,
-
-          -- output --
-          validOut        => valid_inserter(i),
-          dOut            => dout_inserter(i)
-        );
+    -- Trigger gate  --
+    valid_inserter(i) <= triggerGate and supptop_validOut(i);
 
   end generate;
 
