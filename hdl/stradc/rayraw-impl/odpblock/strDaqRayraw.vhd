@@ -154,6 +154,7 @@ architecture RTL of StrDaqRayraw is
   signal reg_adc_mask     : std_logic_vector(255 downto 0);
   signal reg_bls          : std_logic_vector(kWidthBls-1 downto 0);
   signal reg_bls_th       : std_logic_vector(kNumAdcBit-1 downto 0);
+  signal reg_bls_baseline : std_logic_vector(kNumAdcBit-1 downto 0);
 
   -- Vital --------------------------------------------------------
   signal incoming_buf_full, incoming_buf_full_tdc, incoming_buf_full_adc  : std_logic;
@@ -443,6 +444,7 @@ begin
     enBLSuppressor  => reg_bls(kIndexEnBls),
     polBLSuppressor => reg_bls(kIndexBlsPol),
     thBLSuppressor  => reg_bls_th,
+    baselineBLSuppressor => reg_bls_baseline,
 
     -- Data flow control --
     daqOn           => daq_is_running,
@@ -686,6 +688,7 @@ begin
         reg_adc_mask      <= (others => '0');
         reg_bls           <= (others => '0');
         reg_bls_th        <= (others => '0');
+        reg_bls_baseline  <= (others => '0');
         reg_enbypass      <= (others => '0');
         reg_tot_filter_control  <= (others => '0');
         reg_tot_minth           <= (others => '0');
@@ -760,6 +763,16 @@ begin
                   reg_bls_th(7 downto 0)  <= dataLocalBusIn;
                 when k2ndByte =>
                   reg_bls_th(kNumAdcBit-1 downto 8)  <= dataLocalBusIn(kNumAdcBit-8-1 downto 0);
+                when others =>
+                  null;
+              end case;
+
+            elsif(addrLocalBus(kNonMultiByte'range) = kBaselineBls(kNonMultiByte'range)) then
+              case addrLocalBus(kMultiByte'range) is
+                when k1stByte =>
+                  reg_bls_baseline(7 downto 0)  <= dataLocalBusIn;
+                when k2ndByte =>
+                  reg_bls_baseline(kNumAdcBit-1 downto 8)  <= dataLocalBusIn(kNumAdcBit-8-1 downto 0);
                 when others =>
                   null;
               end case;
@@ -869,6 +882,16 @@ begin
                   dataLocalBusOut   <= reg_bls_th(7 downto 0);
                 when k2ndByte =>
                   dataLocalBusOut   <= "000000" & reg_bls_th(kNumAdcBit-1 downto 8);
+                when others =>
+                  null;
+              end case;
+
+            elsif(addrLocalBus(kNonMultiByte'range) = kBaselineBls(kNonMultiByte'range)) then
+              case addrLocalBus(kMultiByte'range) is
+                when k1stByte =>
+                  dataLocalBusOut   <= reg_bls_baseline(7 downto 0);
+                when k2ndByte =>
+                  dataLocalBusOut   <= "000000" & reg_bls_baseline(kNumAdcBit-1 downto 8);
                 when others =>
                   null;
               end case;
