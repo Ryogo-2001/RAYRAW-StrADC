@@ -52,6 +52,24 @@ end SimpleBLSuppressorTop;
 
 architecture Behavioral of SimpleBLSuppressorTop is
 
+  -- Debug ILA (only instantiated when enDEBUG=true, i.e. one selected channel).
+  -- Probe widths assume kNumSample=4, kWidthAdcData=10 (the values ODPBlockADC
+  -- instantiates this entity with); generate the ila_0 IP with matching widths:
+  --   probe0 41b (dIn 40 + validIn 1), probe1 43b (supp_dOut 40 + supp_typeOut 2 + supp_validOut 1),
+  --   probe2 2b (pileup_dOut + pileup_validOut), probe3 1b (sat_dOut), probe4 1b (validDelimiter),
+  --   probe5 65b (dOut 64 + validOut 1)
+  COMPONENT ila_0
+    PORT (
+      clk    : IN STD_LOGIC;
+      probe0 : IN STD_LOGIC_VECTOR(40 DOWNTO 0);
+      probe1 : IN STD_LOGIC_VECTOR(42 DOWNTO 0);
+      probe2 : IN STD_LOGIC_VECTOR(1 DOWNTO 0);
+      probe3 : IN STD_LOGIC_VECTOR(0 DOWNTO 0);
+      probe4 : IN STD_LOGIC_VECTOR(0 DOWNTO 0);
+      probe5 : IN STD_LOGIC_VECTOR(64 DOWNTO 0)
+    );
+  END COMPONENT;
+
   -- BLSuppressor --
   signal supp_validOut   : std_logic;
   signal supp_dOut       : std_logic_vector(kNumSample*kWidthAdcData-1 downto 0);
@@ -76,6 +94,11 @@ architecture Behavioral of SimpleBLSuppressorTop is
   -- pileupDetector --
   signal pileup_validOut : std_logic;
   signal pileup_dOut     : std_logic;
+
+  -- final output (mirrored internally so the debug ILA below can read it back;
+  -- an entity's own "out" port cannot be read inside its architecture) --
+  signal final_validOut  : std_logic;
+  signal final_dOut      : std_logic_vector(63 downto 0);
 
 begin
 
@@ -217,8 +240,26 @@ begin
       dInDelimiter   => dInDelimiter,
 
       -- dOut (64bit)
-      validOut       => validOut,
-      dOut           => dOut
+      validOut       => final_validOut,
+      dOut           => final_dOut
     );
+
+  validOut <= final_validOut;
+  dOut     <= final_dOut;
+
+  -- Debug ILA: only built into the one channel where enDEBUG is true
+  -- (ODPBlockADC wires enDEBUG => GetDebugFlag(i) for exactly this purpose).
+  gen_ila_debug : if enDEBUG generate
+    u_ila_debug : ila_0
+      PORT MAP (
+        clk    => clk,
+        probe0 => dIn & validIn,
+        probe1 => supp_dOut & supp_typeOut & supp_validOut,
+        probe2 => pileup_dOut & pileup_validOut,
+        probe3(0) => sat_dOut,
+        probe4(0) => validDelimiter,
+        probe5 => final_dOut & final_validOut
+      );
+  end generate;
 
 end Behavioral;

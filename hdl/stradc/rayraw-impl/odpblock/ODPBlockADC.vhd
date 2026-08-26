@@ -198,7 +198,7 @@ begin
         kNumSample      => 4,
         kWidthAdcData   => kNumAdcBit,
         kNumFsModeWords => 256,
-        enDEBUG         => false
+        enDEBUG         => GetDebugFlag(i)
       )
       port map(
         -- system --
