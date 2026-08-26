@@ -49,10 +49,19 @@ architecture Behavioral of DataSelector is
   -- memory
   type t_data_buf is array (0 to kMaxBufWords-1) of std_logic_vector(kWidthBus-1 downto 0);
   type t_type_buf is array (0 to kMaxBufWords-1) of std_logic_vector(kWidthAdcSFType-1 downto 0);
-  
+
   signal buf_d : t_data_buf;
   signal buf_t : t_type_buf;
-  
+
+  attribute ram_style : string;
+  attribute ram_style of buf_d : signal is "block";
+  attribute ram_style of buf_t : signal is "block";
+
+  -- registered read-back of buf_d/buf_t (1 cycle behind rd_ptr, matches Block RAM's synchronous-read latency)
+  signal buf_d_q     : std_logic_vector(kWidthBus-1 downto 0);
+  signal buf_t_q     : std_logic_vector(kWidthAdcSFType-1 downto 0);
+  signal out_active  : std_logic := '0';  -- '1' when buf_d_q/buf_t_q hold a valid RAW word to output this cycle
+
   signal wr_ptr : integer range 0 to kMaxBufWords-1 := 0;
   signal rd_ptr : integer range 0 to kMaxBufWords-1 := 0;
 
@@ -105,19 +114,32 @@ begin
 
   -- Buffer
   u_write : process(clk)
+    variable v_wr_addr : integer range 0 to kMaxBufWords-1;
   begin
     if rising_edge(clk) then
       if raw_validIn = '1' then
         if raw_typeIn = kCTypeSfHead then
-          buf_d(0) <= raw_dIn;
-          buf_t(0) <= raw_typeIn;
-          wr_ptr   <= 1;
+          v_wr_addr := 0;
+          wr_ptr    <= 1;
         else
-          buf_d(wr_ptr) <= raw_dIn;
-          buf_t(wr_ptr) <= raw_typeIn;
-          wr_ptr <= wr_ptr + 1;
+          v_wr_addr := wr_ptr;
+          wr_ptr    <= wr_ptr + 1;
         end if;
+
+        -- single indexed write statement per array, so the tool can infer a proper
+        -- single write port (a literal/variable split across two statements defeats it)
+        buf_d(v_wr_addr) <= raw_dIn;
+        buf_t(v_wr_addr) <= raw_typeIn;
       end if;
+    end if;
+  end process;
+
+  -- Block RAM read port: address (rd_ptr) presented this cycle, data available next cycle.
+  u_buf_read : process(clk)
+  begin
+    if rising_edge(clk) then
+      buf_d_q <= buf_d(rd_ptr);
+      buf_t_q <= buf_t(rd_ptr);
     end if;
   end process;
 
@@ -134,6 +156,7 @@ begin
         hbd_step     <= '0';
         validOut     <= '0';
         rd_ptr       <= 0;
+        out_active   <= '0';
         num_word     <= (others => '0');
       else
         
@@ -164,29 +187,37 @@ begin
 
         validOut <= '0'; 
 
-        -- RAW
+        -- RAW (buf_d/buf_t are Block RAM now: rd_ptr is the address issued *this*
+        -- cycle, buf_d_q/buf_t_q hold the word for the address issued *last* cycle)
         if busy_raw = '1' or req_raw = '1' then
-          
+
           if req_raw = '1' then
-            req_raw  <= '0';
-            busy_raw <= '1';
-            num_word <= num_word + 1;
-          end if;
-          
-          validOut <= '1';
-          dOut(63 downto 60) <= "00" & buf_t(rd_ptr); 
-          dOut(59 downto 40) <= (others => '0');
-          dOut(39 downto 0)  <= buf_d(rd_ptr);
-          
-          if buf_t(rd_ptr) = kCTypeSfTrail then
-            busy_raw   <= '0';
-            busy_event <= '0';
-            rd_ptr     <= 0; 
+            -- burst start: issue the first address (0); no data ready yet this cycle
+            req_raw    <= '0';
+            busy_raw   <= '1';
+            num_word   <= num_word + 1;
+            out_active <= '0';
           else
-            rd_ptr   <= rd_ptr + 1;
+            if out_active = '1' and buf_t_q = kCTypeSfTrail then
+              -- the word we just received was the trailer: stop, no further address
+              busy_raw   <= '0';
+              busy_event <= '0';
+              out_active <= '0';
+              rd_ptr     <= 0;
+            else
+              -- keep issuing addresses; output becomes active one cycle after busy_raw
+              rd_ptr     <= rd_ptr + 1;
+              out_active <= busy_raw;
+            end if;
           end if;
 
-        
+          if out_active = '1' then
+            validOut <= '1';
+            dOut(63 downto 60) <= "00" & buf_t_q;
+            dOut(59 downto 40) <= (others => '0');
+            dOut(39 downto 0)  <= buf_d_q;
+          end if;
+
         elsif req_sum = '1' then
           validOut <= '1';
           
@@ -213,8 +244,8 @@ begin
             dOut     <= reg_hbd_data;
             hbd_step <= '1';
           else
-            dOut(63 downto 60) <= kDatatypeHeartbeatT2; 
-            dOut(59 downto 16) <= (others => '0');
+            dOut(63 downto 58) <= kDatatypeHeartbeatT2;
+            dOut(57 downto 16) <= (others => '0');
             dOut(15 downto 0)  <= std_logic_vector(num_word);
             hbd_step <= '0';
             req_hbd  <= '0';
