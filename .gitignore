@@ -90,3 +90,8 @@ dfx_runtime.txt
 #########
 ip/*/*
 !ip/*/*.xci
+#########
+# Debug-only IP cores (ILA/VIO): local-only, never commit
+#########
+ip/ila_0/*.xci
+ip/vio_1/*.xci
