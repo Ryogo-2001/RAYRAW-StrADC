@@ -156,6 +156,12 @@ architecture RTL of StrDaqRayraw is
   signal reg_bls_th       : std_logic_vector(kNumAdcBit-1 downto 0);
   signal reg_bls_baseline : std_logic_vector(kNumAdcBit-1 downto 0);
 
+  -- Power-on defaults for the BLSuppressor registers, used until a host
+  -- overwrites them over RBCP (kRegBls/kThBls/kBaselineBls).
+  constant kDefaultRegBls      : std_logic_vector(kWidthBls-1 downto 0)  := (kIndexEnBls => '1', kIndexBlsPol => '1', others => '0');
+  constant kDefaultThBls       : std_logic_vector(kNumAdcBit-1 downto 0) := std_logic_vector(to_unsigned(600, kNumAdcBit));
+  constant kDefaultBaselineBls : std_logic_vector(kNumAdcBit-1 downto 0) := std_logic_vector(to_unsigned(500, kNumAdcBit));
+
   -- Vital --------------------------------------------------------
   signal incoming_buf_full, incoming_buf_full_tdc, incoming_buf_full_adc  : std_logic;
 
@@ -686,9 +692,9 @@ begin
       if(sync_reset = '1') then
         reg_tdc_mask      <= (others => '0');
         reg_adc_mask      <= (others => '0');
-        reg_bls           <= (others => '0');
-        reg_bls_th        <= (others => '0');
-        reg_bls_baseline  <= (others => '0');
+        reg_bls           <= kDefaultRegBls;
+        reg_bls_th        <= kDefaultThBls;
+        reg_bls_baseline  <= kDefaultBaselineBls;
         reg_enbypass      <= (others => '0');
         reg_tot_filter_control  <= (others => '0');
         reg_tot_minth           <= (others => '0');
