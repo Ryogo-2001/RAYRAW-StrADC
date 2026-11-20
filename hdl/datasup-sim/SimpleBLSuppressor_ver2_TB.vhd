@@ -180,6 +180,7 @@ begin
     port map(
       clk          => clk,
       srst         => srst,
+      polarityIn   => '1',
       validIn      => supp_validOut,
       dIn          => supp_dOut,
       typeIn       => supp_typeOut,

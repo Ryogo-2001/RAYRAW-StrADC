@@ -77,6 +77,12 @@ architecture Behavioral of SimpleBLSuppressorTop is
   signal supp_dOut       : std_logic_vector(kNumSample*kWidthAdcData-1 downto 0);
   signal supp_typeOut    : std_logic_vector(kWidthAdcSFType-1 downto 0);
 
+  constant kAdcMax       : integer := 2**kWidthAdcData - 1;
+  signal norm_validOut   : std_logic;
+  signal norm_dOut       : std_logic_vector(kNumSample*kWidthAdcData-1 downto 0);
+  signal norm_typeOut    : std_logic_vector(kWidthAdcSFType-1 downto 0);
+  signal norm_th         : std_logic_vector(kWidthAdcData-1 downto 0);
+
   -- WaveformIntegrator --
   signal intg_validOut   : std_logic;
   signal intg_dOut       : std_logic_vector(kWidthIntegral-1 downto 0);
@@ -128,6 +134,47 @@ begin
       typeOut     => supp_typeOut
     );
 
+  u_normalize : process(clk)
+    variable v_bl  : integer;
+    variable v_val : integer;
+  begin
+    if rising_edge(clk) then
+      if srst = '1' then
+        norm_validOut <= '0';
+      else
+        norm_validOut <= supp_validOut;
+      end if;
+      norm_typeOut <= supp_typeOut;
+
+      v_bl := to_integer(unsigned(baselineIn));
+      for i in 0 to kNumSample-1 loop
+        if polarityIn = '1' or i >= kValidNumSample then
+          norm_dOut((i+1)*kWidthAdcData-1 downto i*kWidthAdcData) <= supp_dOut((i+1)*kWidthAdcData-1 downto i*kWidthAdcData);
+        else
+          v_val := 2*v_bl - to_integer(unsigned(supp_dOut((i+1)*kWidthAdcData-1 downto i*kWidthAdcData)));
+          if v_val < 0 then
+            v_val := 0;
+          elsif v_val > kAdcMax then
+            v_val := kAdcMax;
+          end if;
+          norm_dOut((i+1)*kWidthAdcData-1 downto i*kWidthAdcData) <= std_logic_vector(to_unsigned(v_val, kWidthAdcData));
+        end if;
+      end loop;
+
+      if polarityIn = '1' then
+        norm_th <= thresholdIn;
+      else
+        v_val := 2*v_bl - to_integer(unsigned(thresholdIn));
+        if v_val < 0 then
+          v_val := 0;
+        elsif v_val > kAdcMax then
+          v_val := kAdcMax;
+        end if;
+        norm_th <= std_logic_vector(to_unsigned(v_val, kWidthAdcData));
+      end if;
+    end if;
+  end process;
+
   -- WaveformIntegrator
   u_integrator : entity mylib.WaveformIntegrator
     generic map (
@@ -140,9 +187,9 @@ begin
       clk         => clk,
       srst        => srst,
       baselineIn  => baselineIn,
-      validIn     => supp_validOut,
-      dIn         => supp_dOut,
-      typeIn      => supp_typeOut,
+      validIn     => norm_validOut,
+      dIn         => norm_dOut,
+      typeIn      => norm_typeOut,
       validOut    => intg_validOut,
       integralOut => intg_dOut
     );
@@ -152,11 +199,13 @@ begin
     generic map (
       kNumSample    => kNumSample,
       kWidthAdcData => kWidthAdcData,
-      kSatValue     => kSatValue
+      kSatValue     => kSatValue,
+      kValidNumSample => kValidNumSample
     )
     port map (
       clk          => clk,
       srst         => srst,
+      polarityIn   => polarityIn,
       validIn      => supp_validOut,
       dIn          => supp_dOut,
       typeIn       => supp_typeOut,
@@ -173,9 +222,9 @@ begin
     port map (
       clk      => clk,
       srst     => srst,
-      validIn  => supp_validOut,
-      dIn      => supp_dOut,
-      typeIn   => supp_typeOut,
+      validIn  => norm_validOut,
+      dIn      => norm_dOut,
+      typeIn   => norm_typeOut,
       validOut => peak_validOut,
       peakOut  => peak_dOut
     );
@@ -190,10 +239,10 @@ begin
     port map (
       clk         => clk,
       srst        => srst,
-      thresholdIn => thresholdIn,
-      validIn     => supp_validOut,
-      dIn         => supp_dOut,
-      typeIn      => supp_typeOut,
+      thresholdIn => norm_th,
+      validIn     => norm_validOut,
+      dIn         => norm_dOut,
+      typeIn      => norm_typeOut,
       validOut    => tot_validOut,
       totOut      => tot_dOut
     );

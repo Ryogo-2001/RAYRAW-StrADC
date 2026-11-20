@@ -11,11 +11,13 @@ entity SaturationDetector is
   generic (
     kNumSample    : integer := 4;
     kWidthAdcData : integer := 10;
-    kSatValue     : integer := 1023 
+    kSatValue     : integer := 1023;
+    kValidNumSample : integer := 3
   );
   port (
     clk           : in  std_logic;
     srst          : in  std_logic;
+    polarityIn    : in  std_logic;
 
     -- Data In --
     validIn       : in  std_logic;
@@ -34,6 +36,8 @@ architecture Behavioral of SaturationDetector is
   signal adc_data : IntDataArray;
 
   signal reg_sat  : std_logic := '0';
+
+  constant kSatValueNeg : integer := 2**kWidthAdcData - 1 - kSatValue;
 
 begin
 
@@ -58,9 +62,15 @@ begin
 
           elsif typeIn = kCTypeSfPayload then
             var_sat := '0';
-            for i in 0 to kNumSample-1 loop
-              if adc_data(i) >= to_unsigned(kSatValue, kWidthAdcData) then
-                var_sat := '1';
+            for i in 0 to kValidNumSample-1 loop
+              if polarityIn = '1' then
+                if adc_data(i) >= to_unsigned(kSatValue, kWidthAdcData) then
+                  var_sat := '1';
+                end if;
+              else
+                if adc_data(i) <= to_unsigned(kSatValueNeg, kWidthAdcData) then
+                  var_sat := '1';
+                end if;
               end if;
             end loop;
 
