@@ -242,7 +242,9 @@ begin
       kNumSample     => kNumSample,
       kWidthAdcData  => kAdcWidthData,
       kWidthIntegral => kWidthIntegral,
-      kMaxBufWords   => 256
+      kMaxBufWords   => 256,
+      kPreSamples    => 2,
+      kClkPerWord    => 5
     )
     port map(
       clk            => clk,

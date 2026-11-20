@@ -13,7 +13,9 @@ entity DataSelector is
     kNumSample     : integer := 4;
     kWidthAdcData  : integer := 10;
     kWidthIntegral : integer := 32;
-    kMaxBufWords   : integer := 256
+    kMaxBufWords   : integer := 256;
+    kPreSamples    : integer range 1 to 15 := 2;
+    kClkPerWord    : integer range 1 to 64 := 5
   );
   port (
     clk            : in  std_logic;
@@ -83,9 +85,8 @@ architecture Behavioral of DataSelector is
   -- event counter
   signal num_word     : unsigned(15 downto 0) := (others => '0');
 
-  -- HBD delay 
-  -- kPreSamples + BRAM_delay(1)
-  constant kHbdDelay : integer := 11; 
+  -- HBD delay
+  constant kHbdDelay : integer := kPreSamples * kClkPerWord + 2;
   signal valid_shift : std_logic_vector(kHbdDelay-1 downto 0) := (others => '0');
   type t_data_shift is array (0 to kHbdDelay-1) of std_logic_vector(63 downto 0);
   signal data_shift  : t_data_shift := (others => (others => '0'));
@@ -236,8 +237,8 @@ begin
             busy_event <= '0'; 
           end if;
 
-        -- HBD 
-        elsif req_hbd = '1' and busy_event = '0' then
+        -- HBD
+        elsif req_hbd = '1' and (busy_event = '0' or hbd_step = '1') then
           validOut <= '1';
           
           if hbd_step = '0' then

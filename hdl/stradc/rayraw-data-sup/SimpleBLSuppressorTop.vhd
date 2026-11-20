@@ -16,6 +16,7 @@ entity SimpleBLSuppressorTop is
 
     kPreSamples       : integer range 1 to 15 := 2;
     kPostSamples      : integer range 0 to 15 := 4;
+    kClkPerWord       : integer range 1 to 64 := 5;
 
     kSatValue         : integer := 1023;
     kLutDepth         : integer := 64;
@@ -218,7 +219,9 @@ begin
       kNumSample     => kNumSample,
       kWidthAdcData  => kWidthAdcData,
       kWidthIntegral => kWidthIntegral,
-      kMaxBufWords   => kMaxBufWords
+      kMaxBufWords   => kMaxBufWords,
+      kPreSamples    => kPreSamples,
+      kClkPerWord    => kClkPerWord
     )
     port map (
       clk            => clk,
