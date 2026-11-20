@@ -11,7 +11,8 @@ entity WaveformIntegrator is
   generic (
     kNumSample     : integer := 4;
     kWidthAdcData  : integer := 10;
-    kWidthIntegral : integer := 32
+    kWidthIntegral : integer := 32;
+    kValidNumSample : integer := 3
   );
   port (
     clk            : in  std_logic;
@@ -36,7 +37,7 @@ architecture Behavioral of WaveformIntegrator is
   type IntDataArray is array (0 to kNumSample-1) of unsigned(kWidthAdcData-1 downto 0);
   signal adc_data : IntDataArray;
 
-  signal reg_integral : unsigned(kWidthIntegral-1 downto 0) := (others => '0');
+  signal reg_integral : signed(kWidthIntegral-1 downto 0) := (others => '0');
 
 begin
 
@@ -45,8 +46,8 @@ begin
   end generate;
 
   u_calc : process(clk)
-    variable var_sum      : unsigned(kWidthIntegral-1 downto 0);
-    variable var_baseline : unsigned(kWidthAdcData-1 downto 0);
+    variable var_sum      : signed(kWidthIntegral-1 downto 0);
+    variable var_baseline : signed(kWidthIntegral-1 downto 0);
   begin
     if rising_edge(clk) then
       if srst = '1' then
@@ -62,10 +63,10 @@ begin
 
           elsif typeIn = kCTypeSfPayload then
             var_sum := (others => '0');
-            var_baseline := unsigned(baselineIn);
+            var_baseline := resize(signed('0' & baselineIn), kWidthIntegral);
 
-            for i in 0 to kNumSample-1 loop
-              var_sum := var_sum + resize(adc_data(i) - var_baseline, kWidthIntegral);
+            for i in 0 to kValidNumSample-1 loop
+              var_sum := var_sum + resize(signed('0' & adc_data(i)), kWidthIntegral) - var_baseline;
             end loop;
             
             reg_integral <= reg_integral + var_sum;

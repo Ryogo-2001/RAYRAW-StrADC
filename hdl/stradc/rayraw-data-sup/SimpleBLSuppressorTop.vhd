@@ -13,6 +13,7 @@ entity SimpleBLSuppressorTop is
     kWidthAdcData     : integer := 10;
     kWidthIntegral    : integer := 32;
     kNumFsModeWords   : integer := 256;
+    kValidNumSample   : integer := 3;
 
     kPreSamples       : integer range 1 to 15 := 2;
     kPostSamples      : integer range 0 to 15 := 4;
@@ -132,7 +133,8 @@ begin
     generic map (
       kNumSample     => kNumSample,
       kWidthAdcData  => kWidthAdcData,
-      kWidthIntegral => kWidthIntegral
+      kWidthIntegral => kWidthIntegral,
+      kValidNumSample => kValidNumSample
     )
     port map (
       clk         => clk,
