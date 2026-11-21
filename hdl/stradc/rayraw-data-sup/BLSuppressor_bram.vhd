@@ -17,6 +17,7 @@ entity BLSuppressor_bram is
     
     kPreSamples       : integer range 1 to 15 := 2;  
     kPostSamples      : integer range 0 to 15 := 4;  
+    kMaxPayloadWords  : integer := 254;
     
     enDEBUG           : boolean := false
   );
@@ -76,7 +77,7 @@ architecture BRAM_Based of BLSuppressor_bram is
 
   constant kWidthCounter : integer := integer(ceil(log2(real(kNumFsModeWords))));
   signal fs_counter      : unsigned(kWidthCounter-1 downto 0) := (others => '0');
-  signal size_count      : unsigned(kWidthCounter-1 downto 0) := (others => '0');
+  signal size_count      : integer range 0 to kMaxPayloadWords := 0;
 
   -- Pipeline Control Signals 
   signal ctrl_valid    : std_logic := '0';
@@ -152,7 +153,7 @@ begin
         addr_w       <= 0;
         addr_r       <= 0;
         post_counter <= 0;
-        size_count   <= (others => '0');
+        size_count   <= 0;
         fs_counter   <= (others => '0');
         ctrl_valid   <= '0';
         ctrl_use_ram <= '0';
@@ -185,7 +186,7 @@ begin
                 ctrl_dout    <= x"000000" & hb_delay_line(kPreSamples - 1);
                 
                 post_counter <= kPreSamples + kPostSamples + 1; 
-                size_count   <= (others => '0');
+                size_count   <= 0;
 
                 if addr_w >= kPreSamples then
                   addr_r <= addr_w - kPreSamples;
@@ -200,7 +201,7 @@ begin
                 post_counter <= kPreSamples + kPostSamples + 1;
               end if;
 
-              if post_counter > 0 or pulse_detect = '1' then
+              if (post_counter > 0 or pulse_detect = '1') and size_count < kMaxPayloadWords then
                 ctrl_valid   <= '1';
                 ctrl_type    <= kCTypeSfPayload;
                 ctrl_use_ram <= '1'; 

@@ -15,7 +15,8 @@ entity DataSelector is
     kWidthIntegral : integer := 32;
     kMaxBufWords   : integer := 256;
     kPreSamples    : integer range 1 to 15 := 2;
-    kClkPerWord    : integer range 1 to 64 := 5
+    kClkPerWord    : integer range 1 to 64 := 5;
+    kEvQueueDepth  : integer range 2 to 16 := 4
   );
   port (
     clk            : in  std_logic;
@@ -65,29 +66,46 @@ architecture Behavioral of DataSelector is
   attribute ram_style of buf_d : signal is "block";
   attribute ram_style of buf_t : signal is "block";
 
-  -- registered read-back of buf_d/buf_t (1 cycle behind rd_ptr, matches Block RAM's synchronous-read latency)
   signal buf_d_q     : std_logic_vector(kWidthBus-1 downto 0);
   signal buf_t_q     : std_logic_vector(kWidthAdcSFType-1 downto 0);
-  signal out_active  : std_logic := '0';  -- '1' when buf_d_q/buf_t_q hold a valid RAW word to output this cycle
+  signal out_active  : std_logic := '0';
 
-  signal wr_ptr : integer range 0 to kMaxBufWords-1 := 0;
-  signal rd_ptr : integer range 0 to kMaxBufWords-1 := 0;
+  signal wr_ptr     : integer range 0 to kMaxBufWords-1 := 0;
+  signal rd_ptr     : integer range 0 to kMaxBufWords-1 := 0;
+  signal lock_ptr   : integer range 0 to kMaxBufWords-1;
+  signal wr_we      : std_logic;
+  signal wr_drop    : std_logic := '0';
+  signal is_head    : std_logic;
+  signal space_full : std_logic;
+  signal q_full     : std_logic;
 
-  signal busy_event : std_logic := '0'; -- add flag (HBD)
-  signal busy_raw   : std_logic := '0';
-  signal req_raw    : std_logic := '0';
-  signal req_sum    : std_logic := '0';
-  signal req_hbd    : std_logic := '0';
-  
-  signal sum_step   : std_logic := '0';
-  signal hbd_step   : std_logic := '0';
+  type t_start_q is array (0 to kEvQueueDepth-1) of integer range 0 to kMaxBufWords-1;
+  type t_intg_q  is array (0 to kEvQueueDepth-1) of std_logic_vector(kWidthIntegral-1 downto 0);
+  type t_peak_q  is array (0 to kEvQueueDepth-1) of std_logic_vector(kWidthAdcData-1 downto 0);
 
-  -- regester
-  signal reg_intg     : std_logic_vector(kWidthIntegral-1 downto 0);
-  signal reg_peak     : std_logic_vector(kWidthAdcData-1 downto 0);
-  signal reg_tot      : std_logic_vector(kWidthIntegral-1 downto 0);
+  signal q_start    : t_start_q := (others => 0);
+  signal q_intg     : t_intg_q;
+  signal q_tot      : t_intg_q;
+  signal q_peak     : t_peak_q;
+  signal q_keep     : std_logic_vector(kEvQueueDepth-1 downto 0) := (others => '0');
+  signal q_raw      : std_logic_vector(kEvQueueDepth-1 downto 0) := (others => '0');
+  signal q_ovf      : std_logic_vector(kEvQueueDepth-1 downto 0) := (others => '0');
+  signal q_rdy      : std_logic_vector(kEvQueueDepth-1 downto 0) := (others => '0');
+  signal q_head     : integer range 0 to kEvQueueDepth-1 := 0;
+  signal q_tail     : integer range 0 to kEvQueueDepth-1 := 0;
+  signal q_cnt      : integer range 0 to kEvQueueDepth := 0;
+  signal cur_slot   : integer range 0 to kEvQueueDepth-1 := 0;
+  signal cur_pushed : std_logic := '0';
+  signal fill_slot  : integer range 0 to kEvQueueDepth-1 := 0;
+  signal fill_en    : std_logic := '0';
+
+  type t_state is (sIdle, sRaw, sSum, sHbd);
+  signal state        : t_state := sIdle;
+  signal req_hbd      : std_logic := '0';
   signal reg_hbd_data : std_logic_vector(63 downto 0);
-  
+  signal reg_hbd_daq  : std_logic := '0';
+  signal hbd_wait     : integer range 0 to kEvQueueDepth := 0;
+
   -- word counter
   signal gen_words    : unsigned(kPosHbdGenSize'length-4 downto 0) := (others => '0');
 
@@ -101,8 +119,24 @@ architecture Behavioral of DataSelector is
   signal thr_shift   : std_logic_vector(kHbdDelay downto 0) := (others => '0');
   signal daq_al      : std_logic;
   signal thr_al      : std_logic;
-  signal ev_keep     : std_logic := '0';
-  signal reg_hbd_daq : std_logic := '0';
+
+  function next_addr(a : integer) return integer is
+  begin
+    if a = kMaxBufWords-1 then
+      return 0;
+    else
+      return a + 1;
+    end if;
+  end function;
+
+  function next_slot(a : integer) return integer is
+  begin
+    if a = kEvQueueDepth-1 then
+      return 0;
+    else
+      return a + 1;
+    end if;
+  end function;
 
 begin
 
@@ -136,30 +170,24 @@ begin
   daq_al <= daq_shift(kHbdDelay-1) when signBit = '0' else daq_shift(kHbdDelay);
   thr_al <= thr_shift(kHbdDelay-1) when signBit = '0' else thr_shift(kHbdDelay);
 
-
   -- Buffer
+  is_head    <= '1' when raw_typeIn = kCTypeSfHead else '0';
+  q_full     <= '1' when q_cnt = kEvQueueDepth else '0';
+  lock_ptr   <= rd_ptr when state = sRaw else q_start(q_head);
+  space_full <= '1' when q_cnt > 0 and next_addr(wr_ptr) = lock_ptr else '0';
+  wr_we      <= raw_validIn when (is_head = '1' and q_full = '0' and space_full = '0') or
+                                 (is_head = '0' and wr_drop = '0' and space_full = '0') else '0';
+
   u_write : process(clk)
-    variable v_wr_addr : integer range 0 to kMaxBufWords-1;
   begin
     if rising_edge(clk) then
-      if raw_validIn = '1' then
-        if raw_typeIn = kCTypeSfHead then
-          v_wr_addr := 0;
-          wr_ptr    <= 1;
-        else
-          v_wr_addr := wr_ptr;
-          wr_ptr    <= wr_ptr + 1;
-        end if;
-
-        -- single indexed write statement per array, so the tool can infer a proper
-        -- single write port (a literal/variable split across two statements defeats it)
-        buf_d(v_wr_addr) <= raw_dIn;
-        buf_t(v_wr_addr) <= raw_typeIn;
+      if wr_we = '1' then
+        buf_d(wr_ptr) <= raw_dIn;
+        buf_t(wr_ptr) <= raw_typeIn;
       end if;
     end if;
   end process;
 
-  -- Block RAM read port: address (rd_ptr) presented this cycle, data available next cycle.
   u_buf_read : process(clk)
   begin
     if rising_edge(clk) then
@@ -168,123 +196,157 @@ begin
     end if;
   end process;
 
-  u_read : process(clk)
+  u_ctrl : process(clk)
+    variable v_push : integer range 0 to 1;
+    variable v_pop  : integer range 0 to 1;
   begin
     if rising_edge(clk) then
       if srst = '1' then
-        busy_event   <= '0';
-        busy_raw     <= '0';
-        req_raw      <= '0';
-        req_sum      <= '0';
-        req_hbd      <= '0';
-        sum_step     <= '0';
-        hbd_step     <= '0';
-        validOut     <= '0';
+        wr_ptr       <= 0;
         rd_ptr       <= 0;
+        wr_drop      <= '0';
+        q_keep       <= (others => '0');
+        q_raw        <= (others => '0');
+        q_ovf        <= (others => '0');
+        q_rdy        <= (others => '0');
+        q_head       <= 0;
+        q_tail       <= 0;
+        q_cnt        <= 0;
+        cur_slot     <= 0;
+        cur_pushed   <= '0';
+        fill_slot    <= 0;
+        fill_en      <= '0';
+        state        <= sIdle;
         out_active   <= '0';
-        gen_words    <= (others => '0');
-        ev_keep      <= '0';
+        req_hbd      <= '0';
         reg_hbd_daq  <= '0';
+        hbd_wait     <= 0;
+        gen_words    <= (others => '0');
+        validOut     <= '0';
       else
+        v_push := 0;
+        v_pop  := 0;
 
-        if raw_validIn = '1' and raw_typeIn = kCTypeSfHead then
-          busy_event <= '1';
-          ev_keep    <= daq_al and (not thr_al) and triggerGate;
-        end if;
-
-        
         if pileup_valid = '1' then
-          if (isSat = '1') or (isPileup = '1') then
-            req_raw <= '1';
-          else
-            req_sum <= '1';
+          if fill_en = '1' then
+            q_rdy(fill_slot)  <= '1';
+            q_raw(fill_slot)  <= isSat or isPileup;
+            q_intg(fill_slot) <= intg_val;
+            q_peak(fill_slot) <= peak_val;
+            q_tot(fill_slot)  <= tot_val;
           end if;
-          reg_intg <= intg_val;
-          reg_peak <= peak_val;
-          reg_tot  <= tot_val;
+          fill_en <= '0';
         end if;
 
-        -- ref kHbdDelay-1
-        if valid_shift(kHbdDelay-1) = '1' then
-          if req_hbd = '0' then
-            reg_hbd_data <= data_shift(kHbdDelay-1);
-            reg_hbd_daq  <= daq_al;
-          end if;
-          req_hbd <= '1';
-        end if;
-
-
-        validOut <= '0'; 
-
-        -- RAW (buf_d/buf_t are Block RAM now: rd_ptr is the address issued *this*
-        -- cycle, buf_d_q/buf_t_q hold the word for the address issued *last* cycle)
-        if busy_raw = '1' or req_raw = '1' then
-
-          if req_raw = '1' then
-            -- burst start: issue the first address (0); no data ready yet this cycle
-            req_raw    <= '0';
-            busy_raw   <= '1';
-            out_active <= '0';
-          else
-            if out_active = '1' and buf_t_q = kCTypeSfTrail then
-              -- the word we just received was the trailer: stop, no further address
-              busy_raw   <= '0';
-              busy_event <= '0';
-              out_active <= '0';
-              rd_ptr     <= 0;
+        if raw_validIn = '1' then
+          if is_head = '1' then
+            if q_full = '0' and space_full = '0' then
+              v_push := 1;
+              q_start(q_tail) <= wr_ptr;
+              q_keep(q_tail)  <= daq_al and (not thr_al) and triggerGate;
+              q_ovf(q_tail)   <= '0';
+              q_rdy(q_tail)   <= '0';
+              cur_slot        <= q_tail;
+              cur_pushed      <= '1';
+              wr_drop         <= '0';
             else
-              -- keep issuing addresses; output becomes active one cycle after busy_raw
-              rd_ptr     <= rd_ptr + 1;
-              out_active <= busy_raw;
+              cur_pushed      <= '0';
+              wr_drop         <= '1';
             end if;
+          elsif wr_drop = '0' and space_full = '1' then
+            wr_drop           <= '1';
+            q_ovf(cur_slot)   <= '1';
           end if;
 
-          if out_active = '1' then
-            validOut <= ev_keep;
-            if ev_keep = '1' then
-              gen_words <= gen_words + 1;
+          if wr_we = '1' then
+            wr_ptr <= next_addr(wr_ptr);
+          end if;
+
+          if raw_typeIn = kCTypeSfTrail then
+            fill_en   <= cur_pushed;
+            fill_slot <= cur_slot;
+          end if;
+        end if;
+
+        validOut <= '0';
+
+        case state is
+          when sIdle =>
+            if req_hbd = '1' and hbd_wait = 0 then
+              validOut <= reg_hbd_daq;
+              dOut     <= reg_hbd_data;
+              state    <= sHbd;
+
+            elsif q_cnt > 0 and q_rdy(q_head) = '1' then
+              if q_keep(q_head) = '0' or (q_raw(q_head) = '1' and q_ovf(q_head) = '1') then
+                v_pop := 1;
+              elsif q_raw(q_head) = '1' then
+                rd_ptr     <= q_start(q_head);
+                out_active <= '0';
+                state      <= sRaw;
+              else
+                validOut           <= '1';
+                dOut(63 downto 60) <= "00" & kCTypeSfPayload;
+                dOut(59 downto 40) <= (others => '0');
+                dOut(39 downto 0)  <= q_intg(q_head) & x"00";
+                gen_words          <= gen_words + 1;
+                state              <= sSum;
+              end if;
             end if;
-            dOut(63 downto 60) <= "00" & buf_t_q;
-            dOut(59 downto 40) <= (others => '0');
-            dOut(39 downto 0)  <= buf_d_q;
-          end if;
 
-        elsif req_sum = '1' then
-          validOut <= ev_keep;
-          if ev_keep = '1' then
-            gen_words <= gen_words + 1;
-          end if;
+          when sRaw =>
+            if out_active = '1' and buf_t_q = kCTypeSfTrail then
+              out_active <= '0';
+              v_pop      := 1;
+              state      <= sIdle;
+            else
+              rd_ptr     <= next_addr(rd_ptr);
+              out_active <= '1';
+            end if;
 
-          if sum_step = '0' then
-            dOut(63 downto 60) <= "00" & kCTypeSfPayload;
-            dOut(59 downto 40) <= (others => '0');
-            dOut(39 downto 0)  <= reg_intg & x"00";
-            sum_step <= '1';
-          else
+            if out_active = '1' then
+              validOut           <= '1';
+              dOut(63 downto 60) <= "00" & buf_t_q;
+              dOut(59 downto 40) <= (others => '0');
+              dOut(39 downto 0)  <= buf_d_q;
+              gen_words          <= gen_words + 1;
+            end if;
+
+          when sSum =>
+            validOut           <= '1';
             dOut(63 downto 60) <= "00" & kCTypeSfTrail;
             dOut(59 downto 40) <= (others => '0');
-            dOut(39 downto 0)  <= reg_tot(29 downto 0) & reg_peak;
-            sum_step   <= '0';
-            req_sum    <= '0';
-            busy_event <= '0'; 
-          end if;
+            dOut(39 downto 0)  <= q_tot(q_head)(29 downto 0) & q_peak(q_head);
+            gen_words          <= gen_words + 1;
+            v_pop              := 1;
+            state              <= sIdle;
 
-        -- HBD
-        elsif req_hbd = '1' and (busy_event = '0' or hbd_step = '1') then
-          validOut <= reg_hbd_daq;
-
-          if hbd_step = '0' then
-            dOut     <= reg_hbd_data;
-            hbd_step <= '1';
-          else
+          when sHbd =>
+            validOut                     <= reg_hbd_daq;
             dOut                         <= (others => '0');
             dOut(kPosHbdDataType'range)  <= kDatatypeHeartbeatT2;
             dOut(kPosHbdGenSize'range)   <= std_logic_vector(gen_words) & "000";
-            hbd_step  <= '0';
-            req_hbd   <= '0';
-            gen_words <= (others => '0');
-          end if;
+            gen_words                    <= (others => '0');
+            req_hbd                      <= '0';
+            state                        <= sIdle;
+        end case;
 
+        if v_pop = 1 then
+          q_rdy(q_head) <= '0';
+          q_head        <= next_slot(q_head);
+        end if;
+        if v_push = 1 then
+          q_tail <= next_slot(q_tail);
+        end if;
+        q_cnt <= q_cnt + v_push - v_pop;
+
+        if valid_shift(kHbdDelay-1) = '1' and req_hbd = '0' then
+          req_hbd      <= '1';
+          reg_hbd_data <= data_shift(kHbdDelay-1);
+          reg_hbd_daq  <= daq_al;
+          hbd_wait     <= q_cnt + v_push - v_pop;
+        elsif req_hbd = '1' and v_pop = 1 and hbd_wait > 0 then
+          hbd_wait     <= hbd_wait - 1;
         end if;
 
       end if;

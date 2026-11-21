@@ -124,6 +124,7 @@ begin
       kNumFsModeWords => kNumFsModeWords,
       kPreSamples     => kPreSamples,
       kPostSamples    => kPostSamples,
+      kMaxPayloadWords => kMaxBufWords/2 - 2,
       enDEBUG         => enDEBUG
     )
     port map (
