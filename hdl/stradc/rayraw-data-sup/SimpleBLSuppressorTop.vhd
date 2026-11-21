@@ -46,6 +46,12 @@ entity SimpleBLSuppressorTop is
     validDelimiter    : in  std_logic;
     dInDelimiter      : in  std_logic_vector(63 downto 0);
 
+    -- Data flow control --
+    daqOn             : in  std_logic := '1';
+    hbfThrottlingOn   : in  std_logic := '0';
+    triggerGate       : in  std_logic := '1';
+    signBit           : in  std_logic := '0';
+
     -- Data Out (64bit, HBD-framed) --
     validOut          : out std_logic;
     dOut              : out std_logic_vector(63 downto 0)
@@ -292,6 +298,11 @@ begin
       -- HBD in
       validDelimiter => validDelimiter,
       dInDelimiter   => dInDelimiter,
+
+      daqOn           => daqOn,
+      hbfThrottlingOn => hbfThrottlingOn,
+      triggerGate     => triggerGate,
+      signBit         => signBit,
 
       -- dOut (64bit)
       validOut       => final_validOut,

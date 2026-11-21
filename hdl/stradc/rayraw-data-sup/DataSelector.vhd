@@ -38,6 +38,12 @@ entity DataSelector is
     validDelimiter : in  std_logic;
     dInDelimiter   : in  std_logic_vector(63 downto 0);
 
+    -- Data flow control
+    daqOn           : in  std_logic := '1';
+    hbfThrottlingOn : in  std_logic := '0';
+    triggerGate     : in  std_logic := '1';
+    signBit         : in  std_logic := '0';
+
     -- Data out
     validOut       : out std_logic;
     dOut           : out std_logic_vector(63 downto 0)
@@ -82,14 +88,21 @@ architecture Behavioral of DataSelector is
   signal reg_tot      : std_logic_vector(kWidthIntegral-1 downto 0);
   signal reg_hbd_data : std_logic_vector(63 downto 0);
   
-  -- event counter
-  signal num_word     : unsigned(15 downto 0) := (others => '0');
+  -- word counter
+  signal gen_words    : unsigned(kPosHbdGenSize'length-4 downto 0) := (others => '0');
 
   -- HBD delay
   constant kHbdDelay : integer := kPreSamples * kClkPerWord + 2;
   signal valid_shift : std_logic_vector(kHbdDelay-1 downto 0) := (others => '0');
   type t_data_shift is array (0 to kHbdDelay-1) of std_logic_vector(63 downto 0);
   signal data_shift  : t_data_shift := (others => (others => '0'));
+
+  signal daq_shift   : std_logic_vector(kHbdDelay downto 0) := (others => '0');
+  signal thr_shift   : std_logic_vector(kHbdDelay downto 0) := (others => '0');
+  signal daq_al      : std_logic;
+  signal thr_al      : std_logic;
+  signal ev_keep     : std_logic := '0';
+  signal reg_hbd_daq : std_logic := '0';
 
 begin
 
@@ -100,17 +113,28 @@ begin
       if srst = '1' then
         valid_shift <= (others => '0');
         data_shift  <= (others => (others => '0'));
+        daq_shift   <= (others => '0');
+        thr_shift   <= (others => '0');
       else
         valid_shift(0) <= validDelimiter;
         data_shift(0)  <= dInDelimiter;
+        daq_shift(0)   <= daqOn;
+        thr_shift(0)   <= hbfThrottlingOn;
         -- shift process
         for i in 1 to kHbdDelay-1 loop
           valid_shift(i) <= valid_shift(i-1);
           data_shift(i)  <= data_shift(i-1);
         end loop;
+        for i in 1 to kHbdDelay loop
+          daq_shift(i) <= daq_shift(i-1);
+          thr_shift(i) <= thr_shift(i-1);
+        end loop;
       end if;
     end if;
   end process;
+
+  daq_al <= daq_shift(kHbdDelay-1) when signBit = '0' else daq_shift(kHbdDelay);
+  thr_al <= thr_shift(kHbdDelay-1) when signBit = '0' else thr_shift(kHbdDelay);
 
 
   -- Buffer
@@ -158,11 +182,14 @@ begin
         validOut     <= '0';
         rd_ptr       <= 0;
         out_active   <= '0';
-        num_word     <= (others => '0');
+        gen_words    <= (others => '0');
+        ev_keep      <= '0';
+        reg_hbd_daq  <= '0';
       else
-        
+
         if raw_validIn = '1' and raw_typeIn = kCTypeSfHead then
           busy_event <= '1';
+          ev_keep    <= daq_al and (not thr_al) and triggerGate;
         end if;
 
         
@@ -180,7 +207,8 @@ begin
         -- ref kHbdDelay-1
         if valid_shift(kHbdDelay-1) = '1' then
           if req_hbd = '0' then
-            reg_hbd_data <= data_shift(kHbdDelay-1); 
+            reg_hbd_data <= data_shift(kHbdDelay-1);
+            reg_hbd_daq  <= daq_al;
           end if;
           req_hbd <= '1';
         end if;
@@ -196,7 +224,6 @@ begin
             -- burst start: issue the first address (0); no data ready yet this cycle
             req_raw    <= '0';
             busy_raw   <= '1';
-            num_word   <= num_word + 1;
             out_active <= '0';
           else
             if out_active = '1' and buf_t_q = kCTypeSfTrail then
@@ -213,21 +240,26 @@ begin
           end if;
 
           if out_active = '1' then
-            validOut <= '1';
+            validOut <= ev_keep;
+            if ev_keep = '1' then
+              gen_words <= gen_words + 1;
+            end if;
             dOut(63 downto 60) <= "00" & buf_t_q;
             dOut(59 downto 40) <= (others => '0');
             dOut(39 downto 0)  <= buf_d_q;
           end if;
 
         elsif req_sum = '1' then
-          validOut <= '1';
-          
+          validOut <= ev_keep;
+          if ev_keep = '1' then
+            gen_words <= gen_words + 1;
+          end if;
+
           if sum_step = '0' then
             dOut(63 downto 60) <= "00" & kCTypeSfPayload;
             dOut(59 downto 40) <= (others => '0');
             dOut(39 downto 0)  <= reg_intg & x"00";
             sum_step <= '1';
-            num_word <= num_word + 1;
           else
             dOut(63 downto 60) <= "00" & kCTypeSfTrail;
             dOut(59 downto 40) <= (others => '0');
@@ -239,18 +271,18 @@ begin
 
         -- HBD
         elsif req_hbd = '1' and (busy_event = '0' or hbd_step = '1') then
-          validOut <= '1';
-          
+          validOut <= reg_hbd_daq;
+
           if hbd_step = '0' then
             dOut     <= reg_hbd_data;
             hbd_step <= '1';
           else
-            dOut(63 downto 58) <= kDatatypeHeartbeatT2;
-            dOut(57 downto 16) <= (others => '0');
-            dOut(15 downto 0)  <= std_logic_vector(num_word);
-            hbd_step <= '0';
-            req_hbd  <= '0';
-            num_word <= (others => '0');
+            dOut                         <= (others => '0');
+            dOut(kPosHbdDataType'range)  <= kDatatypeHeartbeatT2;
+            dOut(kPosHbdGenSize'range)   <= std_logic_vector(gen_words) & "000";
+            hbd_step  <= '0';
+            req_hbd   <= '0';
+            gen_words <= (others => '0');
           end if;
 
         end if;

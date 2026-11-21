@@ -218,13 +218,18 @@ begin
         validDelimiter => validDelimiter,
         dInDelimiter   => dInDelimiter,
 
+        -- Data flow control --
+        daqOn           => daqOn,
+        hbfThrottlingOn => hbfThrottlingOn,
+        triggerGate     => triggerGate,
+        signBit         => LaccpFineOffset(LaccpFineOffset'high),
+
         -- Data Out --
         validOut    => supptop_validOut(i),
         dOut        => dout_inserter(i)
       );
 
-    -- Trigger gate  --
-    valid_inserter(i) <= triggerGate and supptop_validOut(i);
+    valid_inserter(i) <= supptop_validOut(i);
 
   end generate;
 
