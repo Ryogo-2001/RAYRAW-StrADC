@@ -28,6 +28,11 @@ entity RayrawStrAdcRO is
     -- Status --
     isReady       : out std_logic_vector(kNumAsicBlock-1 downto 0); -- If high, data outputs are valid
     bitslipErr    : out std_logic_vector(kNumAsicBlock-1 downto 0); -- Indicate bitslip failure
+    clrStatus     : in  std_logic := '0';
+    bitslipErrHold: out std_logic_vector(kNumAsicBlock-1 downto 0);
+    readReady     : out std_logic_vector(kNumAsicBlock-1 downto 0);
+    fifoRdCount   : out std_logic_vector(4*kNumAsicBlock-1 downto 0);
+    clkAdcCount   : out std_logic_vector(16*kNumAsicBlock-1 downto 0);
 
     -- Data Out --
     validOut      : out std_logic_vector(kNumAsicBlock-1 downto 0); -- FIFO output is valid
@@ -106,6 +111,19 @@ architecture RTL of RayrawStrAdcRO is
   signal fifo_rd_count            : FifoRdCountType;
   signal read_ready               : std_logic_vector(kNumAsicBlock-1 downto 0);
 
+  type ClkDivType is array (integer range kNumAsicBlock-1 downto 0) of unsigned(4 downto 0);
+  signal clk_div_cnt              : ClkDivType := (others => (others => '0'));
+  signal sync_clr_adc             : SyncType := (others => (others => '0'));
+  signal bitslip_err_hold_adc     : std_logic_vector(kNumAsicBlock-1 downto 0) := (others => '0');
+  signal sync_bitslip_err_hold    : SyncType := (others => (others => '0'));
+  signal sync_clk_div             : SyncType := (others => (others => '0'));
+
+  constant kWidthClkGate          : integer:= 20;
+  signal clk_gate_count           : unsigned(kWidthClkGate-1 downto 0) := (others => '0');
+  type ClkCountType is array (integer range kNumAsicBlock-1 downto 0) of unsigned(15 downto 0);
+  signal clk_edge_count           : ClkCountType := (others => (others => '0'));
+  signal clk_count_latch          : ClkCountType := (others => (others => '0'));
+
 
   attribute mark_debug        : boolean;
   attribute mark_debug of rden_fifo      : signal is enDEBUG;
@@ -124,6 +142,33 @@ begin
 
   validOut    <= read_valid;
   adcDataOut  <= adc_data_block_out;
+
+  readReady   <= read_ready;
+  gen_status_out : for i in 0 to kNumAsicBlock-1 generate
+    bitslipErrHold(i)                     <= sync_bitslip_err_hold(i)(kSyncLength-1);
+    fifoRdCount(4*(i+1)-1 downto 4*i)     <= fifo_rd_count(i);
+    clkAdcCount(16*(i+1)-1 downto 16*i)   <= std_logic_vector(clk_count_latch(i));
+  end generate;
+
+  u_status_sys : process(clkSys)
+  begin
+    if(clkSys'event and clkSys = '1') then
+      for i in 0 to kNumAsicBlock-1 loop
+        sync_clk_div(i)           <= sync_clk_div(i)(kSyncLength-2 downto 0) & clk_div_cnt(i)(4);
+        sync_bitslip_err_hold(i)  <= sync_bitslip_err_hold(i)(kSyncLength-2 downto 0) & bitslip_err_hold_adc(i);
+      end loop;
+
+      clk_gate_count  <= clk_gate_count + 1;
+      for i in 0 to kNumAsicBlock-1 loop
+        if(clk_gate_count = (clk_gate_count'range => '1')) then
+          clk_count_latch(i)  <= clk_edge_count(i);
+          clk_edge_count(i)   <= (others => '0');
+        elsif(sync_clk_div(i)(kSyncLength-1) /= sync_clk_div(i)(kSyncLength-2) and clk_edge_count(i) /= x"FFFF") then
+          clk_edge_count(i)   <= clk_edge_count(i) + 1;
+        end if;
+      end loop;
+    end if;
+  end process;
 
 
   -- Clock domain crossing ----------------------------------------------------------
@@ -145,6 +190,19 @@ begin
     u_sync_rst : entity mylib.synchronizer
       port map(clk_adc(i), srstAdcCycle, sync_rst_adccycle(i));
     -- Clock Domain Crossing --
+
+    u_status_adc : process(clk_adc(i))
+    begin
+      if(clk_adc(i)'event and clk_adc(i) = '1') then
+        clk_div_cnt(i)    <= clk_div_cnt(i) + 1;
+        sync_clr_adc(i)   <= sync_clr_adc(i)(kSyncLength-2 downto 0) & clrStatus;
+        if(sync_clr_adc(i)(kSyncLength-1) = '1') then
+          bitslip_err_hold_adc(i) <= '0';
+        elsif(bitslip_error(i) = '1') then
+          bitslip_err_hold_adc(i) <= '1';
+        end if;
+      end if;
+    end process;
 
     gen_ch : for j in 0 to kNumAdcCh-1 generate
       adc_data_block_out(kNumAdcCh*i +j)   <= dout_fifo(i)(kPackingFactor*kNumAdcBit*(j+1)-1 downto kPackingFactor*kNumAdcBit*j);

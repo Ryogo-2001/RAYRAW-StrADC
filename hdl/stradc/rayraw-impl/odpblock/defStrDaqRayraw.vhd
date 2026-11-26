@@ -41,4 +41,13 @@ package defStrDaqRayraw is
 
   constant kSelfRecoveryMode      : LocalAddressType := x"0D0"; -- W/R, [0:0], Activate self recovery mode
 
+  constant kAdcCtrl               : LocalAddressType := x"0F0"; -- W/R, [2:0], ADC receiver control (0: rstAdc, 1: rstAdcCycle, 2: clear status)
+  constant kIndexRstAdc           : integer:= 0;
+  constant kIndexRstAdcCycle      : integer:= 1;
+  constant kIndexClrAdcStatus     : integer:= 2;
+  constant kAdcStatus             : LocalAddressType := x"100"; -- R,   [15:0], [3:0] isReady, [7:4] bitslipErr (held), [11:8] readReady
+  constant kAdcFifoCount          : LocalAddressType := x"110"; -- R,   [15:0], CDC FIFO rd_data_count, 4 bits per ASIC block
+  constant kAdcClkCount           : LocalAddressType := x"120"; -- R,   [63:0], ADC clock monitor, 16 bits per ASIC block
+  constant kAdcValidCount         : LocalAddressType := x"130"; -- R,   [31:0], Number of valid ADC words after receiver
+
   end package defStrDaqRayraw;

@@ -59,6 +59,15 @@ entity ODPBlockADC is
     adcFrameP     : in std_logic_vector(kNumAsicBlock-1 downto 0);  -- ADC FRAME
     adcFrameN     : in std_logic_vector(kNumAsicBlock-1 downto 0);
 
+    -- ADC status --
+    clrAdcStatus    : in  std_logic;
+    adcIsReady      : out std_logic_vector(kNumAsicBlock-1 downto 0);
+    adcBitslipErr   : out std_logic_vector(kNumAsicBlock-1 downto 0);
+    adcReadReady    : out std_logic_vector(kNumAsicBlock-1 downto 0);
+    adcFifoRdCount  : out std_logic_vector(4*kNumAsicBlock-1 downto 0);
+    adcClkCount     : out std_logic_vector(16*kNumAsicBlock-1 downto 0);
+    adcValidCount   : out std_logic_vector(31 downto 0);
+
     -- Data Out --
     validOut        : out std_logic_vector(kNumInput-1 downto 0);
     dOut            : out DataArrayType(kNumInput-1 downto 0)
@@ -78,6 +87,7 @@ architecture RTL of ODPBlockADC is
   -- ADC unit --
   signal is_ready_asic      : std_logic_vector(kNumAsicBlock-1 downto 0);
   signal bitslip_err_asic   : std_logic_vector(kNumAsicBlock-1 downto 0);
+  signal valid_count        : unsigned(31 downto 0) := (others => '0');
 
   attribute mark_debug of is_ready_asic      : signal is enDEBUG;
   attribute mark_debug of bitslip_err_asic   : signal is enDEBUG;
@@ -142,6 +152,11 @@ begin
       -- Status --
       isReady       => is_ready_asic,
       bitslipErr    => bitslip_err_asic,
+      clrStatus     => clrAdcStatus,
+      bitslipErrHold=> adcBitslipErr,
+      readReady     => adcReadReady,
+      fifoRdCount   => adcFifoRdCount,
+      clkAdcCount   => adcClkCount,
 
       -- Data Out --
       validOut      => valid_adc_data,
@@ -157,6 +172,20 @@ begin
     );
 
   valid_data  <= and_reduce(valid_adc_data);
+
+  adcIsReady    <= is_ready_asic;
+  adcValidCount <= std_logic_vector(valid_count);
+
+  u_valid_count : process(sysClk)
+  begin
+    if(sysClk'event and sysClk = '1') then
+      if(clrAdcStatus = '1') then
+        valid_count <= (others => '0');
+      elsif(valid_data = '1') then
+        valid_count <= valid_count + 1;
+      end if;
+    end if;
+  end process;
 
   gen_convdata : for i in 0 to kNumInput-1 generate
   begin

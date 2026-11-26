@@ -156,6 +156,15 @@ architecture RTL of StrDaqRayraw is
   signal reg_bls_th       : std_logic_vector(kNumAdcBit-1 downto 0);
   signal reg_bls_baseline : std_logic_vector(kNumAdcBit-1 downto 0);
 
+  signal reg_adc_ctrl     : std_logic_vector(7 downto 0);
+  signal adc_is_ready     : std_logic_vector(kNumAsicBlock-1 downto 0);
+  signal adc_bitslip_err  : std_logic_vector(kNumAsicBlock-1 downto 0);
+  signal adc_read_ready   : std_logic_vector(kNumAsicBlock-1 downto 0);
+  signal adc_fifo_count   : std_logic_vector(4*kNumAsicBlock-1 downto 0);
+  signal adc_clk_count    : std_logic_vector(16*kNumAsicBlock-1 downto 0);
+  signal adc_valid_count  : std_logic_vector(31 downto 0);
+  signal adc_status       : std_logic_vector(15 downto 0);
+
   -- Power-on defaults for the BLSuppressor registers, used until a host
   -- overwrites them over RBCP (kRegBls/kThBls/kBaselineBls).
   constant kDefaultRegBls      : std_logic_vector(kWidthBls-1 downto 0)  := (kIndexEnBls => '1', kIndexBlsPol => '1', others => '0');
@@ -437,8 +446,8 @@ begin
   port map(
     -- System --
     rst             => rst,
-    rstAdc          => rstAdc,
-    rstAdcCycle     => rstAdcCycle,
+    rstAdc          => rstAdc or reg_adc_ctrl(kIndexRstAdc),
+    rstAdcCycle     => rstAdcCycle or reg_adc_ctrl(kIndexRstAdcCycle),
     sysClk          => clk,
     indepClk        => indepClk,
     --userReg         : in  std_logic_vector(kPosHbdUserReg'length-1 downto 0);
@@ -472,11 +481,22 @@ begin
     adcFrameP     => adcFrameP,
     adcFrameN     => adcFrameN,
 
+    -- ADC status --
+    clrAdcStatus    => reg_adc_ctrl(kIndexClrAdcStatus),
+    adcIsReady      => adc_is_ready,
+    adcBitslipErr   => adc_bitslip_err,
+    adcReadReady    => adc_read_ready,
+    adcFifoRdCount  => adc_fifo_count,
+    adcClkCount     => adc_clk_count,
+    adcValidCount   => adc_valid_count,
+
     -- Data Out --
     validOut        => odp_wren(2*kNumInput-1 downto kNumInput),
     dOut            => odp_dout(2*kNumInput-1 downto kNumInput)
 
   );
+
+  adc_status  <= "0000" & adc_read_ready & adc_bitslip_err & adc_is_ready;
 
   -- vital block --
   input_throttling_type2_on <= input_throttling_type2_on_adc or input_throttling_type2_on_tdc;
@@ -710,6 +730,8 @@ begin
 
         reg_self_recovery_mode    <= '0';
 
+        reg_adc_ctrl      <= (others => '0');
+
         state_lbus        <= Init;
       else
         case state_lbus is
@@ -845,6 +867,9 @@ begin
             elsif(addrLocalBus(kNonMultiByte'range) = kSelfRecoveryMode(kNonMultiByte'range)) then
               reg_self_recovery_mode <= dataLocalBusIn(0);
 
+            elsif(addrLocalBus(kNonMultiByte'range) = kAdcCtrl(kNonMultiByte'range)) then
+              reg_adc_ctrl  <= dataLocalBusIn;
+
             else
               null;
             end if;
@@ -949,6 +974,45 @@ begin
 
             elsif(addrLocalBus(kNonMultiByte'range) = kSelfRecoveryMode(kNonMultiByte'range)) then
               dataLocalBusOut <= (0 => reg_self_recovery_mode, others => '0');
+
+            elsif(addrLocalBus(kNonMultiByte'range) = kAdcCtrl(kNonMultiByte'range)) then
+              dataLocalBusOut <= reg_adc_ctrl;
+
+            elsif(addrLocalBus(kNonMultiByte'range) = kAdcStatus(kNonMultiByte'range)) then
+              case addrLocalBus(kMultiByte'range) is
+                when k1stByte =>
+                  dataLocalBusOut <= adc_status(7 downto 0);
+                when k2ndByte =>
+                  dataLocalBusOut <= adc_status(15 downto 8);
+                when others =>
+                  dataLocalBusOut <= (others => '0');
+              end case;
+
+            elsif(addrLocalBus(kNonMultiByte'range) = kAdcFifoCount(kNonMultiByte'range)) then
+              case addrLocalBus(kMultiByte'range) is
+                when k1stByte =>
+                  dataLocalBusOut <= adc_fifo_count(7 downto 0);
+                when k2ndByte =>
+                  dataLocalBusOut <= adc_fifo_count(15 downto 8);
+                when others =>
+                  dataLocalBusOut <= (others => '0');
+              end case;
+
+            elsif(addrLocalBus(kNonMultiByte'range) = kAdcClkCount(kNonMultiByte'range)) then
+              dataLocalBusOut <= (others => '0');
+              for i in 0 to 7 loop
+                if(to_integer(unsigned(addrLocalBus(kMultiByte'range))) = i) then
+                  dataLocalBusOut <= adc_clk_count(8*(i+1)-1 downto 8*i);
+                end if;
+              end loop;
+
+            elsif(addrLocalBus(kNonMultiByte'range) = kAdcValidCount(kNonMultiByte'range)) then
+              dataLocalBusOut <= (others => '0');
+              for i in 0 to 3 loop
+                if(to_integer(unsigned(addrLocalBus(kMultiByte'range))) = i) then
+                  dataLocalBusOut <= adc_valid_count(8*(i+1)-1 downto 8*i);
+                end if;
+              end loop;
 
             else
               null;
